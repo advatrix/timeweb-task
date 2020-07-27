@@ -1,5 +1,7 @@
+import sys
+
 from flask import Flask
-from flask_restful import Api, Resource
+from flask_restful import Api, Resource, reqparse
 import pika
 
 app = Flask(__name__)
@@ -20,10 +22,13 @@ class Task:
         self.status = 'finished'
         self.result = result
 
+    def __len__(self):
+        return sys.getsizeof(self)
+
 
 class TaskResource(Resource):
     def __init__(self):
-        super().__init()
+        super().__init__()
         self.connection = pika.BlockingConnection(
             pika.ConnectionParameters(host='localhost')
         )
@@ -33,6 +38,9 @@ class TaskResource(Resource):
         self.channel.queue_declare(queue='task_queue', durable=True)
         self.tasks_list = dict()
 
+        self.parser = reqparse.RequestParser()
+        self.parser.add_argument("url")
+
     def get(self, id_):
         if id_ in self.tasks_list:
             if self.tasks_list[id_].status != 'finished':
@@ -41,11 +49,12 @@ class TaskResource(Resource):
                 return self.tasks_list[id_].result, 200
         return 'Task not found', 404
 
-    def post(self, url):
+    def post(self):
+        url = self.parser.parse_args()
         id_ = len(self.tasks_list)
         task = Task(id_, url)
         self.tasks_list[id_] = task
-        self.channel.basic_publish(exhange='',
+        self.channel.basic_publish(exchange='',
                                    routing_key='task_queue',
                                    body=task,
                                    properties=pika.BasicProperties(
@@ -57,7 +66,7 @@ class TaskResource(Resource):
         self.connection.close()
 
 
-api.add_resource(TaskResource)
+api.add_resource(TaskResource, '/<int:id_>', '/')
 
 if __name__ == '__main__':
     app.run(debug=True)
