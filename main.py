@@ -1,6 +1,8 @@
+from threading import Thread
+
 from flask import Flask
-from flask_restful import Api, Resource
-import pika
+from flask_restful import Api, Resource, reqparse
+from parser import Parser
 
 app = Flask(__name__)
 api = Api(app)
@@ -22,42 +24,43 @@ class Task:
 
 
 class TaskResource(Resource):
+
     def __init__(self):
-        super().__init()
-        self.connection = pika.BlockingConnection(
-            pika.ConnectionParameters(host='localhost')
-        )
+        super().__init__()
 
-        self.channel = self.connection.channel()
-
-        self.channel.queue_declare(queue='task_queue', durable=True)
-        self.tasks_list = dict()
+        self.req_parser = reqparse.RequestParser()
+        self.req_parser.add_argument("url")
 
     def get(self, id_):
-        if id_ in self.tasks_list:
-            if self.tasks_list[id_].status != 'finished':
-                return self.tasks_list[id_].status, 200
+        if id_ < global_id:
+            if tasks_list[id_].status != 'finished':
+                return tasks_list[id_].status, 200
             else:
-                return self.tasks_list[id_].result, 200
+                return tasks_list[id_].result, 200
         return 'Task not found', 404
 
-    def post(self, url):
-        id_ = len(self.tasks_list)
+    def post(self):
+        global global_id
+        url = self.req_parser.parse_args()
+        id_ = global_id
+        global_id += 1
         task = Task(id_, url)
-        self.tasks_list[id_] = task
-        self.channel.basic_publish(exhange='',
-                                   routing_key='task_queue',
-                                   body=task,
-                                   properties=pika.BasicProperties(
-                                       delivery_mode=2,
-                                   ))
+        todo_list.append(task)
+        tasks_list.append(task)
         return str(id_), 201
 
-    def __del__(self):
-        self.connection.close()
 
+api.add_resource(TaskResource, '/<int:id_>', '/')
+global_id = 0
 
-api.add_resource(TaskResource)
+tasks_list = []
+todo_list = []
+done_list = []
+parser = Parser()
+parser_proc = Thread(target=parser.run, args=(todo_list, done_list))
+parser_proc.daemon = True
+parser_proc.start()
+
 
 if __name__ == '__main__':
     app.run(debug=True)
