@@ -15,31 +15,39 @@ class Task:
         self.url = url
         self.result = None
 
-    def take(self):
-        self.status = 'processing'
-
     def finish(self, result: str):
         self.status = 'finished'
         self.result = result
-
-    def __len__(self):
-        return sys.getsizeof(self)
 
 
 class TaskResource(Resource):
     def __init__(self):
         super().__init__()
-        self.connection = pika.BlockingConnection(
+
+        self.conn_to_parser = pika.BlockingConnection(
             pika.ConnectionParameters(host='localhost')
         )
+        self.ch_to_parser = self.conn_to_parser.channel()
+        self.ch_to_parser.queue_declare(queue='task_queue', durable=True)
 
-        self.channel = self.connection.channel()
+        self.conn_from_parser = pika.BlockingConnection(
+            pika.ConnectionParameters(host='localhost', port=5001)
+        )
+        self.ch_from_parser = self.conn_from_parser.channel()
+        self.ch_from_parser.queue_declare(queue='results_queue', durable=True)
+        self.ch_from_parser.basic_qos(prefetch_count=1)
+        self.ch_from_parser.basic_consume(self.update_task, queue='results_queue')
 
-        self.channel.queue_declare(queue='task_queue', durable=True)
         self.tasks_list = dict()
 
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument("url")
+        self.req_parser = reqparse.RequestParser()
+        self.req_parser.add_argument("url")
+
+    def update_task(self, ch, method, properties, task: str):
+        task = task.split(';')
+        id_ = int(task[0])
+        self.tasks_list[id_].finish(task[1])
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def get(self, id_):
         if id_ in self.tasks_list:
@@ -50,16 +58,15 @@ class TaskResource(Resource):
         return 'Task not found', 404
 
     def post(self):
-        url = self.parser.parse_args()
+        url = self.req_parser.parse_args()
         id_ = len(self.tasks_list)
-        task = Task(id_, url)
-        self.tasks_list[id_] = task
-        self.channel.basic_publish(exchange='',
-                                   routing_key='task_queue',
-                                   body=task,
-                                   properties=pika.BasicProperties(
-                                       delivery_mode=2,
-                                   ))
+        self.tasks_list[id_] = Task(id_, url)
+        self.ch_to_parser.basic_publish(exchange='',
+                                        routing_key='task_queue',
+                                        body=f'{id_};{url}',
+                                        properties=pika.BasicProperties(
+                                            delivery_mode=2,
+                                        ))
         return str(id_), 201
 
     def __del__(self):
